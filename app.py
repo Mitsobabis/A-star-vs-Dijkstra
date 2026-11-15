@@ -35,7 +35,7 @@ def get_edge_cost(biome_u, biome_v):
     l = BIOMES[biome_v]["cost"]
     if biome_u == biome_v:
         return k
-    return abs(k - l) / 2.0
+    return abs(k + l) / 2.0
 
 
 def get_min_possible_step_cost():
