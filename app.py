@@ -2,6 +2,7 @@ import io
 import base64
 import heapq
 import time
+import random
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -15,7 +16,7 @@ app = Flask(__name__)
 # 1. BIOME DEFINITIONS & EDGE COST RULES
 # ---------------------------------------------------------
 
-# 0 = Wall/Obstacle, 1..6 = Walkable Biomes with internal cost z
+# 0 = Wall/Obstacle, 1..7 = Walkable Biomes with internal cost z
 BIOMES = {
     0: {"name": "Wall (#)",      "cost": np.inf, "color": "#0f172a"},
     1: {"name": "Road (1/.)",    "cost": 2.0,    "color": "#fde68a"},
@@ -24,12 +25,13 @@ BIOMES = {
     4: {"name": "Hills (4)",     "cost": 11.0,   "color": "#fdba74"},
     5: {"name": "Swamp (5)",     "cost": 16.0,   "color": "#c084fc"},
     6: {"name": "Snow Peak (6)", "cost": 22.0,   "color": "#93c5fd"},
+    7: {"name": "Water (7)",     "cost": 130.0,  "color": "#2732ce"}
 }
 
 def get_edge_cost(biome_u, biome_v):
     """
     Rule 1: Same biome -> cost is z (the biome's internal cost).
-    Rule 2: Different biomes (k, l) -> cost is |k - l| / 2.
+    Rule 2: Different biomes (k, l) -> cost is |k + l| / 2.
     """
     k = BIOMES[biome_u]["cost"]
     l = BIOMES[biome_v]["cost"]
@@ -55,21 +57,29 @@ MIN_STEP_COST = get_min_possible_step_cost()
 # 2. PATHFINDING ENGINE (Weighted Biome Graph)
 # ---------------------------------------------------------
 
-def heuristic(a, b, mode="a_star"):
-    if mode == "dijkstra":
-        return 0.0
-    # Multiply Manhattan distance by MIN_STEP_COST so h(n) never overestimates
+def reconstruct_path(came_from, start, goal):
+    path = []
+    current = goal
+    while current in came_from:
+        path.append(current)
+        current = came_from[current]
+    path.append(start)
+    return path[::-1]
+
+
+def manhattan_heuristic(a, b):
+    # Multiplied by MIN_STEP_COST (2.0) so the heuristic scales with biome weights while staying admissible
     return (abs(a[0] - b[0]) + abs(a[1] - b[1])) * MIN_STEP_COST
 
 
-def run_pathfinding(grid, start, goal, mode="a_star"):
+def dijkstra_search(grid, start, goal):
+    """Dijkstra's Algorithm: Min-heap ordered strictly by cumulative edge cost g(n)."""
     t0 = time.perf_counter()
     rows, cols = grid.shape
     neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
-    open_heap = []
-    heapq.heappush(open_heap, (0.0, 0.0, start))
-
+    # Heap tuple: (g_score, (r, c))
+    open_heap = [(0.0, start)]
     g_score = np.full((rows, cols), np.inf)
     g_score[start] = 0.0
 
@@ -77,41 +87,85 @@ def run_pathfinding(grid, start, goal, mode="a_star"):
     visited = set()
 
     while open_heap:
-        _, current_g, current = heapq.heappop(open_heap)
+        current_g, current = heapq.heappop(open_heap)
 
         if current in visited:
             continue
         visited.add(current)
 
         if current == goal:
-            path = []
-            curr = current
-            while curr in came_from:
-                path.append(curr)
-                curr = came_from[curr]
-            path.append(start)
+            path = reconstruct_path(came_from, start, goal)
             elapsed_ms = (time.perf_counter() - t0) * 1000
-            return path[::-1], visited, round(current_g, 2), elapsed_ms
+            return path, visited, round(current_g, 1), elapsed_ms
 
-        biome_u = grid[current]
+        biome_u = int(grid[current[0], current[1]])
 
         for dr, dc in neighbors:
             nr, nc = current[0] + dr, current[1] + dc
             neighbor = (nr, nc)
 
-            # 0 is an obstacle wall; 1..6 are walkable biomes
-            if 0 <= nr < rows and 0 <= nc < cols and grid[nr, nc] != 0:
-                if neighbor in visited:
+            if 0 <= nr < rows and 0 <= nc < cols:
+                biome_v = int(grid[nr, nc])
+                if biome_v == 0 or neighbor in visited:
                     continue
 
-                biome_v = grid[nr, nc]
                 step_cost = get_edge_cost(biome_u, biome_v)
                 tentative_g = current_g + step_cost
 
                 if tentative_g < g_score[neighbor]:
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g
-                    f_score = tentative_g + heuristic(neighbor, goal, mode)
+                    heapq.heappush(open_heap, (tentative_g, neighbor))
+
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    return [], visited, 0.0, elapsed_ms
+
+
+def astar_search(grid, start, goal):
+    """A* Search: Min-heap ordered by f(n) = g(n) + h(n)."""
+    t0 = time.perf_counter()
+    rows, cols = grid.shape
+    neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    start_h = manhattan_heuristic(start, goal)
+    # Heap tuple: (f_score, current_g, (r, c))
+    open_heap = [(start_h, 0.0, start)]
+    g_score = np.full((rows, cols), np.inf)
+    g_score[start] = 0.0
+
+    came_from = {}
+    visited = set()
+
+    while open_heap:
+        current_f, current_g, current = heapq.heappop(open_heap)
+
+        if current in visited:
+            continue
+        visited.add(current)
+
+        if current == goal:
+            path = reconstruct_path(came_from, start, goal)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            return path, visited, round(current_g, 1), elapsed_ms
+
+        biome_u = int(grid[current[0], current[1]])
+
+        for dr, dc in neighbors:
+            nr, nc = current[0] + dr, current[1] + dc
+            neighbor = (nr, nc)
+
+            if 0 <= nr < rows and 0 <= nc < cols:
+                biome_v = int(grid[nr, nc])
+                if biome_v == 0 or neighbor in visited:
+                    continue
+
+                step_cost = get_edge_cost(biome_u, biome_v)
+                tentative_g = current_g + step_cost
+
+                if tentative_g < g_score[neighbor]:
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score = tentative_g + manhattan_heuristic(neighbor, goal)
                     heapq.heappush(open_heap, (f_score, tentative_g, neighbor))
 
     elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -122,7 +176,7 @@ def run_pathfinding(grid, start, goal, mode="a_star"):
 # 3. BIOME MAP GENERATORS & ASCII PARSER
 # ---------------------------------------------------------
 
-# Use '1'-'6' for biomes ('.' also maps to Biome 1), '#' for walls, 'S' and 'G' for endpoints
+# Use '1'-'7' for biomes ('.' also maps to Biome 1), '#' for walls, 'S' and 'G' for endpoints
 CUSTOM_ASCII_MAPS = {
     "ascii_maze": """
         S1#2222233333444
@@ -140,6 +194,57 @@ CUSTOM_ASCII_MAPS = {
         55555555555551#4
         5##############4
         555555554444444G
+    """,
+    "city_blocks": """
+        S111111111111111111111111
+        11#######11#######1######
+        11#######11#######1######
+        11#######11#######1###111
+        11#######11#######1###122
+        11#######11#######1###123
+        11#######11#######1###123
+        11#######11#######1###123
+        1111111111111111111111123
+        11##########11###11122223
+        11##########11###11123333
+        11##########11###11123333
+        11##########11###11123333
+        1111111111111111111123333
+        #########1#######11223333
+        #########1#######11233333
+        #########1#######11233333
+        #########1#######11233333
+        1111111111#######11233###
+        11#######1#######11233###
+        11#######1#######11233###
+        11#######1111111111111###
+        11#######111111111111G###
+        11#######1#######11233###
+        11#######1#######11233###
+    """,
+    "isonzo": """
+        4444444444444466666666
+        4444444444444446666666
+        4444444444444444466666
+        4444444444444444444444
+        3344444444444444444444
+        7334444444444444444444
+        7333444444444444444444
+        7733333344444444444444
+        777733333G444444444444
+        7777773333333344444444
+        3377777333333333344444
+        4337777777333777734444
+        4433337777777777773444
+        4444444447777333777344
+        4444444444444444477733
+        4444444444444444447773
+        4444444444444444443777
+        6666444444444444444377
+        6666666444444444444433
+        6666S66644444444444444
+        6666666644664444444444
+        6666666646666444444444
     """
 }
 
@@ -153,7 +258,7 @@ def parse_ascii_map(ascii_str):
         for c, char in enumerate(row_str):
             if char == '#':
                 grid[r, c] = 0
-            elif char in '123456':
+            elif char in '1234567':
                 grid[r, c] = int(char)
             elif char == '.':
                 grid[r, c] = 1
@@ -164,6 +269,48 @@ def parse_ascii_map(ascii_str):
                 goal = (r, c)
                 grid[r, c] = 1
     return grid, start, goal
+
+
+def carve_random_river(grid, rng, river_width=2, add_forest_banks=True):
+    """
+    Carves a winding River (Biome 7) across the grid from edge to edge.
+    Optionally lines the riverbanks with Forest (Biome 3) like the Isonzo map.
+    """
+    rows, cols = grid.shape
+    horizontal = rng.random() < 0.5  # 50% chance Left->Right, 50% Top->Bottom
+
+    length = cols if horizontal else rows
+    limit = rows if horizontal else cols
+
+    # Start near the middle of the starting edge
+    pos = float(rng.integers(limit // 4, 3 * limit // 4))
+    phase = rng.uniform(0, 2 * np.pi)
+    freq = rng.uniform(0.12, 0.22)
+
+    for step in range(length):
+        # Meander using a sine wave + slight random walk
+        drift = np.sin(step * freq + phase) * 0.65 + rng.uniform(-0.35, 0.35)
+        pos = np.clip(pos + drift, 1, limit - 2)
+        center = int(round(pos))
+
+        # Optional: paint 1-cell Forest (3) banks along the river
+        if add_forest_banks:
+            b_start = max(0, center - river_width // 2 - 1)
+            b_end = min(limit, center + (river_width + 1) // 2 + 1)
+            if horizontal:
+                grid[b_start:b_end, step] = 3
+            else:
+                grid[step, b_start:b_end] = 3
+
+        # Carve the River (7) channel
+        r_start = max(0, center - river_width // 2)
+        r_end = min(limit, center + (river_width + 1) // 2)
+        if horizontal:
+            grid[r_start:r_end, step] = 7
+        else:
+            grid[step, r_start:r_end] = 7
+
+    return grid
 
 
 def generate_voronoi_biomes(rows, cols, rng, num_seeds=18):
@@ -198,29 +345,9 @@ def load_preset_map(preset_name, size=25, obstacle_prob=0.22, seed=42):
     fixed_rng = np.random.default_rng(101)
     grid = generate_voronoi_biomes(size, size, fixed_rng, num_seeds=16)
 
-    if preset_name == "u_trap":
-        mid = size // 2
-        span = size // 4
-        # Make inside of trap Swamp (5) surrounded by Hills (4) and a Road (1) bypass
-        grid[mid - span : mid + span, mid - span : mid + span] = 5
-        grid[mid - span : mid + span, mid + span] = 0
-        grid[mid + span, mid - span : mid + span + 1] = 0
-        grid[mid - span, mid - span : mid + span + 1] = 0
-        start = (mid, 2)
-        goal = (mid, size - 3)
-
-    elif preset_name == "slalom":
-        # Alternating biome bands (1..6 repeating) + slalom walls
-        for c in range(size):
-            grid[:, c] = ((c // 3) % 6) + 1
-        step = max(4, size // 5)
-        for idx, c in enumerate(range(step, size - 2, step)):
-            if idx % 2 == 0:
-                grid[0 : size - 3, c] = 0
-            else:
-                grid[3 : size, c] = 0
-
-    elif preset_name == "rooms":
+    if preset_name == "rooms":
+        start = (0, 0)
+        goal = (size - 1, size - 1)
         mid = size // 2
         grid[:mid, :mid] = 2      # Top-Left: Grassland
         grid[:mid, mid:] = 5      # Top-Right: Swamp
@@ -237,6 +364,8 @@ def load_preset_map(preset_name, size=25, obstacle_prob=0.22, seed=42):
         grid[3 * size // 4, mid] = 4
 
     elif preset_name == "center_block":
+        start = (0, 0)
+        goal = (size - 1, size - 1)
         margin = size // 4
         # Surround central obstacle with high-cost Snow Peak (6), and place a Road (1) along top edge
         grid[margin - 2 : size - margin + 2, margin - 2 : size - margin + 2] = 6
@@ -245,10 +374,21 @@ def load_preset_map(preset_name, size=25, obstacle_prob=0.22, seed=42):
         grid[margin : size - margin, margin : size - margin] = 0
 
     else:
-        # "random": Both biomes and obstacles depend on the user's random seed
+        start = (random.randint(0, size - 1), random.randint(0, size - 1))
+        goal = (random.randint(0, size - 1), random.randint(0, size - 1))
+
+        while goal == start:
+            goal = (random.randint(0, size - 1), random.randint(0, size - 1))
+
+        # "random": Biomes (1..6), a winding River (7), and random obstacles (0)
         rng = np.random.default_rng(seed)
         grid = generate_voronoi_biomes(size, size, rng, num_seeds=18)
-        walls = rng.random((size, size)) < obstacle_prob
+
+        # Carve a winding river across the random map
+        grid = carve_random_river(grid, rng, river_width=2, add_forest_banks=True)
+
+        # Scatter obstacle walls (keep walls out of the river with `& (grid != 7)`)
+        walls = (rng.random((size, size)) < obstacle_prob) & (grid != 7)
         grid[walls] = 0
 
     # Ensure Start and Goal are walkable
@@ -267,12 +407,12 @@ def render_comparison_plot(grid, start, goal, dj_res, astar_res):
     fig, axes = plt.subplots(1, 2, figsize=(13, 6.2), dpi=110)
     rows, cols = grid.shape
 
-    # Colormap for IDs 0..6
-    cmap = ListedColormap([BIOMES[i]["color"] for i in range(7)])
+    # Colormap for IDs 0..7
+    cmap = ListedColormap([BIOMES[i]["color"] for i in range(8)])
 
     datasets = [
-        ("Dijkstra's Algorithm (h = 0)", dj_res, axes[0]),
-        ("A* Search (Admissible Heuristic)", astar_res, axes[1])
+        ("Dijkstra's Algorithm — Priority: g(n)", dj_res, axes[0]),
+        ("A* Search — Priority: f(n) = g(n) + h(n)", astar_res, axes[1])
     ]
 
     col_step = 1 if cols <= 20 else (2 if cols <= 35 else 5)
@@ -280,7 +420,7 @@ def render_comparison_plot(grid, start, goal, dj_res, astar_res):
 
     for title, (path, visited, total_cost, ms), ax in datasets:
         # 1. Render the underlying biome map + walls
-        ax.imshow(grid, cmap=cmap, vmin=0, vmax=6)
+        ax.imshow(grid, cmap=cmap, vmin=0, vmax=7)
 
         # 2. Overlay Visited Frontier as markers so biome colors stay visible underneath
         if visited:
@@ -329,11 +469,11 @@ def render_comparison_plot(grid, start, goal, dj_res, astar_res):
 
 PRESET_LABELS = {
     "random": "Random Biomes & Obstacles (Seeded)",
-    "u_trap": "The Bug Trap (Preset Biomes)",
-    "slalom": "Slalom Corridors (Preset Biomes)",
     "rooms": "Four Biome Rooms + Highway",
     "center_block": "Snow Peak Center + Road Bypass",
-    "ascii_maze": "Custom ASCII Biome Maze (15x16)"
+    "ascii_maze": "Custom ASCII Biome Maze (15x16)",
+    "city_blocks": "City Blocks (25x25)",
+    "isonzo": "Isonzo River (22x22)"
 }
 
 HTML_TEMPLATE = """
@@ -470,8 +610,8 @@ def index():
     if grid[goal] == 0:
         grid[goal] = 1
 
-    dj_res = run_pathfinding(grid, start, goal, mode="dijkstra")
-    astar_res = run_pathfinding(grid, start, goal, mode="a_star")
+    dj_res = dijkstra_search(grid, start, goal)
+    astar_res = astar_search(grid, start, goal)
 
     plot_data = render_comparison_plot(grid, start, goal, dj_res, astar_res)
 
