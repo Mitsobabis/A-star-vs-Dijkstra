@@ -8,9 +8,9 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template_string, send_from_directory
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=".", static_url_path="")
 
 # ---------------------------------------------------------
 # 1. BIOME DEFINITIONS & EDGE COST RULES
@@ -334,7 +334,7 @@ def generate_voronoi_biomes(rows, cols, rng, num_seeds=18):
     return seed_biomes[nearest_seed]
 
 
-def load_preset_map(preset_name, size=25, obstacle_prob=0.22, seed=42):
+def load_preset_map(preset_name, size=25, obstacle_prob=0.2, seed=42):
     if preset_name in CUSTOM_ASCII_MAPS:
         return parse_ascii_map(CUSTOM_ASCII_MAPS[preset_name])
 
@@ -481,10 +481,10 @@ HTML_TEMPLATE = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>A* vs Dijkstra Multi-Biome Prototype</title>
+    <title>Robot Pathing using A* vs Dijkstra's Algorithm</title>
     <style>
         body { font-family: system-ui, sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: 24px; }
-        .container { max-width: 1180px; margin: 0 auto; background: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .container { max-width: 1180px; margin: 0 auto; background: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); position: relative; z-index: 1; }
         h1 { margin-top: 0; font-size: 1.45rem; }
         form { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; background: #f1f5f9; padding: 16px; border-radius: 8px; margin-bottom: 16px; }
         .group { display: flex; flex-direction: column; gap: 4px; }
@@ -498,10 +498,21 @@ HTML_TEMPLATE = """
         .legend { display: flex; gap: 14px; font-size: 0.82rem; margin-bottom: 12px; flex-wrap: wrap; align-items: center; background: #f8fafc; padding: 10px 12px; border-radius: 6px; border: 1px solid #e2e8f0; }
         .badge { display: inline-block; width: 14px; height: 14px; vertical-align: middle; margin-right: 5px; border-radius: 3px; border: 1px solid #64748b; }
         .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #0284c7; margin-right: 5px; vertical-align: middle; }
-        img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #e2e8f0; }
+        .plot-img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #e2e8f0; display: block; }
         .status { padding: 10px 14px; border-radius: 6px; margin-bottom: 14px; font-weight: 500; font-size: 0.92rem; }
         .found { background: #dcfce7; color: #166534; }
         .blocked { background: #fee2e2; color: #991b1b; }
+        .corner-img {
+            position: fixed;
+            bottom: 16px;
+            width: 165px;
+            height: auto;
+            z-index: 10;
+            pointer-events: none;
+            border: none;
+        }
+        .corner-left { left: 16px; border-radius: 8px; }
+        .corner-right { right: 16px; }
     </style>
     <script>
         function onPresetChange(selectEl) {
@@ -512,7 +523,7 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <h1>A* vs. Dijkstra Weighted Biome Prototype</h1>
+        <h1>Robot Pathing using A* vs Dijkstra's Algorithm</h1>
         <form method="GET" action="/">
             <div class="group">
                 <label>Map Preset</label>
@@ -572,8 +583,11 @@ HTML_TEMPLATE = """
             <span><span class="badge" style="background:#ea580c;"></span>Optimal Path</span>
         </div>
 
-        <img src="data:image/png;base64,{{ plot_data }}" alt="Dijkstra vs A* Biome Plot">
+        <img class="plot-img" src="data:image/png;base64,{{ plot_data }}" alt="Dijkstra vs A* Biome Plot">
     </div>
+
+    <img src="/resources/Crankhead.webp" class="corner-img corner-left" alt="Crankhead">
+    <img src="/resources/Blitzcrankhead.webp" class="corner-img corner-right" alt="Blitzcrankhead">
 </body>
 </html>
 """
@@ -586,12 +600,17 @@ def parse_coord(val, default, limit):
     except ValueError:
         return default
 
+    
+@app.route("/project-img/<path:filename>")
+def project_image(filename):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return send_from_directory(base_dir, filename)
 
 @app.route("/")
 def index():
     preset = request.args.get("preset", "random")
     size = max(10, min(int(request.args.get("size", 25)), 60))
-    density = max(0.0, min(float(request.args.get("density", 0.22)), 0.5))
+    density = max(0.0, min(float(request.args.get("density", 0.2)), 0.5))
     seed = int(request.args.get("seed", 42))
 
     grid, default_start, default_goal = load_preset_map(
