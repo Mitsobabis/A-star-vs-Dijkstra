@@ -28,24 +28,7 @@ O χρήστης καταρχάς έχει την δυνατότητα να αλ
 
 ---------------------------------------------------------------------------------------------------------------------------------
 
-To project αυτό αποτελείται από την εξής δομή:
-Python/
-├── .git/                     # Git version control repository
-├── resources/                # Static image assets
-│   ├── Blitzcrankhead.png
-│   └── Crankhead.png
-├── screenshots/              # Screenshots that are included in the README.md file
-│   ├── App Screenshot.png
-│   ├── Before Biomes.png
-│   ├── Biomes.png
-│   ├── cmd Screenshot.png
-│   ├── Comparison.png
-│   ├── Map Presets.png
-│   ├── Random Options.png
-│   └── Start and Goal.png
-├── app.py                    # Main Flask application, Matplotlib renderer & pathfinding engine
-├── README.md                 # Project documentation
-└── requirements.txt          # Python dependencies (numpy, flask, matplotlib)
+![image alt](https://github.com/Mitsobabis/A-star-vs-Dijkstra/blob/7ee7f5753e14fa181a869815cf726649fb01dc68/screenshots/domh.png)
 
 ---------------------------------------------------------------------------------------------------------------------------------
 
